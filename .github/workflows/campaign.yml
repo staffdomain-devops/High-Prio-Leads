@@ -1,0 +1,145 @@
+name: High Priority Leads — 2-Agent Campaign
+
+on:
+  workflow_dispatch:
+    inputs:
+      contact_id:
+        description: HubSpot contact ID
+        required: true
+        type: string
+      contact_email:
+        description: Contact email address (for DLQ / notifications)
+        required: true
+        type: string
+      skip_enrichment:
+        description: Skip ZoomInfo enrichment (contact already enriched)
+        required: false
+        type: boolean
+        default: false
+  repository_dispatch:
+    types: [high-prio-lead]
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Step 1 — Fetch contact and company data from HubSpot
+      - name: Fetch HubSpot data
+        run: python scripts/fetch_hubspot.py
+        env:
+          INPUT_CONTACT_ID: ${{ github.event.inputs.contact_id || github.event.client_payload.contact_id }}
+          INPUT_CONTACT_EMAIL: ${{ github.event.inputs.contact_email || github.event.client_payload.contact_email }}
+          HUBSPOT_API_KEY: ${{ secrets.HUBSPOT_API_KEY }}
+          RUNNER_TEMP: ${{ runner.temp }}
+
+      # Step 2 — Enrich via ZoomInfo (skippable)
+      - name: Enrich contact
+        run: python scripts/enrich_contact.py
+        env:
+          INPUT_CONTACT_ID: ${{ github.event.inputs.contact_id || github.event.client_payload.contact_id }}
+          INPUT_CONTACT_EMAIL: ${{ github.event.inputs.contact_email || github.event.client_payload.contact_email }}
+          INPUT_SKIP_ENRICHMENT: ${{ github.event.inputs.skip_enrichment || github.event.client_payload.skip_enrichment || 'false' }}
+          HUBSPOT_API_KEY: ${{ secrets.HUBSPOT_API_KEY }}
+          ZOOMINFO_USERNAME: ${{ secrets.ZOOMINFO_USERNAME }}
+          ZOOMINFO_PASSWORD: ${{ secrets.ZOOMINFO_PASSWORD }}
+          RUNNER_TEMP: ${{ runner.temp }}
+
+      # Step 3 — Compute date tokens
+      - name: Compute campaign tokens
+        run: python scripts/compute_campaign_tokens.py
+        env:
+          RUNNER_TEMP: ${{ runner.temp }}
+
+      # Step 4 — Agent 1: Research company, job post, select resources
+      - name: Research contact (Agent 1)
+        run: python scripts/research_contact.py
+        env:
+          INPUT_CONTACT_ID: ${{ github.event.inputs.contact_id || github.event.client_payload.contact_id }}
+          INPUT_CONTACT_EMAIL: ${{ github.event.inputs.contact_email || github.event.client_payload.contact_email }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          RUNNER_TEMP: ${{ runner.temp }}
+
+      # Step 5 — Agent 2: Generate 5-email cold sequence
+      - name: Generate campaign (Agent 2)
+        run: python scripts/generate_campaign.py
+        env:
+          INPUT_CONTACT_ID: ${{ github.event.inputs.contact_id || github.event.client_payload.contact_id }}
+          INPUT_CONTACT_EMAIL: ${{ github.event.inputs.contact_email || github.event.client_payload.contact_email }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          RUNNER_TEMP: ${{ runner.temp }}
+
+      # Step 6 — Write emails + research summary back to HubSpot
+      - name: Write back to HubSpot
+        run: python scripts/write_hubspot.py
+        env:
+          INPUT_CONTACT_ID: ${{ github.event.inputs.contact_id || github.event.client_payload.contact_id }}
+          INPUT_CONTACT_EMAIL: ${{ github.event.inputs.contact_email || github.event.client_payload.contact_email }}
+          HUBSPOT_API_KEY: ${{ secrets.HUBSPOT_API_KEY }}
+          RUNNER_TEMP: ${{ runner.temp }}
+
+      - name: Upload output artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: campaign-output-${{ github.event.inputs.contact_id || github.event.client_payload.contact_id }}
+          path: ${{ runner.temp }}/campaign_output.json
+          retention-days: 7
+
+      - name: Upload research artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-payload-${{ github.event.inputs.contact_id || github.event.client_payload.contact_id }}
+          path: ${{ runner.temp }}/research_payload.json
+          retention-days: 7
+
+      - name: Copy failed contacts log
+        if: failure()
+        run: cp "${{ runner.temp }}/failed_contacts.json" failed_contacts.json 2>/dev/null || echo '{}' > failed_contacts.json
+
+      - name: Upload failure artifact
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failed-contacts-${{ github.event.inputs.contact_id || github.event.client_payload.contact_id }}
+          path: failed_contacts.json
+          retention-days: 7
+
+      - name: Notify Teams on failure
+        if: failure()
+        run: |
+          FAILED_STEP=$(cat "${{ runner.temp }}/failed_contacts.json" 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('failed_step','unknown'))" 2>/dev/null || echo "unknown")
+          ERROR_MSG=$(cat "${{ runner.temp }}/failed_contacts.json" 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('error_message','')[:300])" 2>/dev/null || echo "")
+          CONTACT_EMAIL="${{ github.event.inputs.contact_email || github.event.client_payload.contact_email }}"
+          curl -s -X POST "${{ secrets.TEAMS_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"@type\": \"MessageCard\",
+              \"@context\": \"https://schema.org/extensions\",
+              \"summary\": \"High Prio Leads pipeline failed\",
+              \"themeColor\": \"FF0000\",
+              \"title\": \"High Prio Leads pipeline failed — ${CONTACT_EMAIL}\",
+              \"sections\": [{
+                \"facts\": [
+                  {\"name\": \"Contact\", \"value\": \"${CONTACT_EMAIL}\"},
+                  {\"name\": \"Failed step\", \"value\": \"${FAILED_STEP}\"},
+                  {\"name\": \"Error\", \"value\": \"${ERROR_MSG}\"},
+                  {\"name\": \"Run log\", \"value\": \"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}
+                ]
+              }]
+            }"
