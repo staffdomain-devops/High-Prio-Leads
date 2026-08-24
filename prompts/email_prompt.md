@@ -22,9 +22,9 @@ Businesses working with us save 60-70% on labour costs without sacrificing quali
 - Company: {{contact.company}}
 - Industry: {{contact.industry}}
 - Website: {{contact.website}}
-- Role they are currently hiring for: {{contact.job_title_posted}}
-- Job post link: {{contact.job_post_link}}
-- Job description: {{contact.job_description}}
+- Role they are currently hiring for: {{opportunity.job_title}}
+- Job post link: {{opportunity.job_post_link}}
+- Job description: {{opportunity.job_description}}
 
 ---
 

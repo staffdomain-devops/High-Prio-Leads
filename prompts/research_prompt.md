@@ -11,9 +11,12 @@ CRITICAL: Return only a raw JSON object. No markdown. No code blocks. No backtic
 - Company: {{contact.company}}
 - Industry: {{contact.industry}}
 - Website: {{contact.website}}
-- Role they are currently hiring for: {{contact.job_title_posted}}
-- Job post link: {{contact.job_post_link}}
-- Job description: {{contact.job_description}}
+- Role they are currently hiring for: {{opportunity.job_title}}
+- Job post link: {{opportunity.job_post_link}}
+- Job board: {{opportunity.job_board}}
+- Job vertical: {{opportunity.vertical}}
+- Offshoreability score: {{opportunity.final_score}}
+- Job description: {{opportunity.job_description}}
 
 ## COMPANY DETAILS (from CRM)
 

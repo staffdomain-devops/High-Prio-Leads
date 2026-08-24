@@ -92,6 +92,7 @@ def main():
 
     contact_props = hubspot_data.get("contact_properties") or {}
     company_props = hubspot_data.get("company_properties") or {}
+    opp_props     = hubspot_data.get("opportunity_properties") or {}
 
     # Flatten selected resources for easy substitution in prompt
     resources = research.get("resources", {})
@@ -105,12 +106,15 @@ def main():
         "contact.first_name":    contact_props.get("firstname", ""),
         "contact.last_name":     contact_props.get("lastname", ""),
         "contact.jobtitle":      contact_props.get("jobtitle", ""),
-        "contact.company":       contact_props.get("company", "") or company_props.get("name", ""),
-        "contact.industry":      company_props.get("industry", "") or contact_props.get("industry", ""),
+        "contact.company":       contact_props.get("company", "") or company_props.get("name", "") or opp_props.get("company_name", ""),
+        "contact.industry":      company_props.get("industry", "") or contact_props.get("industry", "") or opp_props.get("vertical", ""),
         "contact.website":       contact_props.get("website", "") or company_props.get("website", ""),
-        "contact.job_title_posted": contact_props.get("job_title_posted", ""),
-        "contact.job_post_link":    contact_props.get("job_post_link", ""),
-        "contact.job_description":  contact_props.get("job_description", ""),
+        # Job posting — from Opportunity custom object
+        "opportunity.job_title":       opp_props.get("job_title___proper") or opp_props.get("job_title", ""),
+        "opportunity.job_post_link":   opp_props.get("job_post_link", ""),
+        "opportunity.job_description": opp_props.get("job_description", ""),
+        "opportunity.job_board":       opp_props.get("job_board", ""),
+        "opportunity.vertical":        opp_props.get("vertical", ""),
         # Research output — pre-digested by Agent 1
         "research.company_summary":       research.get("company_summary", ""),
         "research.job_description_insights": research.get("job_description_insights", ""),
@@ -136,7 +140,7 @@ def main():
         f"  Contact: {tokens['contact.first_name']} {tokens['contact.last_name']}"
         f" @ {tokens['contact.company']}"
     )
-    print(f"  Job posted: {tokens['contact.job_title_posted'] or '(not provided)'}")
+    print(f"  Job posted: {tokens['opportunity.job_title'] or '(not provided)'}")
     print(f"  Case study: {cs.get('id', '?')}")
     print(f"  YouTube:    {yt.get('id', '?')}")
     print(f"  WR email 2: {wr2.get('id', '?')}")

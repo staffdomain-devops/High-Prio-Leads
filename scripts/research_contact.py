@@ -93,6 +93,7 @@ def main():
 
     contact_props = hubspot_data.get("contact_properties") or {}
     company_props = hubspot_data.get("company_properties") or {}
+    opp_props     = hubspot_data.get("opportunity_properties") or {}
 
     tokens = {
         # Contact identity
@@ -102,12 +103,16 @@ def main():
         "contact.company":       contact_props.get("company", ""),
         "contact.industry":      contact_props.get("industry", ""),
         "contact.website":       contact_props.get("website", ""),
-        # Job posting — the primary research input
-        "contact.job_title_posted": contact_props.get("job_title_posted", ""),
-        "contact.job_post_link":    contact_props.get("job_post_link", ""),
-        "contact.job_description":  contact_props.get("job_description", ""),
+        # Job posting — sourced from the Opportunity custom object (p5402982_opportunities)
+        # 100% fill on job_title, 99.99% on job_post_link, 99.8% on job_description
+        "opportunity.job_title":       opp_props.get("job_title___proper") or opp_props.get("job_title", ""),
+        "opportunity.job_post_link":   opp_props.get("job_post_link", ""),
+        "opportunity.job_description": opp_props.get("job_description", ""),
+        "opportunity.job_board":       opp_props.get("job_board", ""),
+        "opportunity.vertical":        opp_props.get("vertical", ""),
+        "opportunity.final_score":     opp_props.get("final_score", ""),
         # Company data
-        "company.name":              company_props.get("name", ""),
+        "company.name":              company_props.get("name", "") or opp_props.get("company_name", ""),
         "company.industry":          company_props.get("industry", ""),
         "company.numberofemployees": company_props.get("numberofemployees", ""),
         "company.city":              company_props.get("city", ""),
@@ -127,7 +132,10 @@ def main():
         f" @ {tokens['contact.company'] or tokens['company.name']}"
     )
     print(f"  Title:           {tokens['contact.jobtitle'] or '(not provided)'}")
-    print(f"  Job posted:      {tokens['contact.job_title_posted'] or '(not provided)'}")
+    print(f"  Job posted:      {tokens['opportunity.job_title'] or '(not provided)'}")
+    print(f"  Job board:       {tokens['opportunity.job_board'] or '(not provided)'}")
+    print(f"  Vertical:        {tokens['opportunity.vertical'] or '(not provided)'}")
+    print(f"  Final score:     {tokens['opportunity.final_score'] or '(not provided)'}")
     print(f"  Industry:        {tokens['company.industry'] or tokens['contact.industry'] or '(not provided)'}")
     print(f"Calling {MODEL} for research...")
 

@@ -176,10 +176,9 @@ def main():
                 "firstname", "lastname", "email", "jobtitle", "company",
                 "industry", "num_employees", "city", "state", "country",
                 "website", "hubspot_owner_id",
-                # Job posting fields — the core input for High Prio Leads
-                "job_title_posted",
-                "job_post_link",
-                "job_description",
+                # link_to_target_role is the contact-level job link (73.7% fill).
+                # Job title/description/link come from the Opportunity object — fetched below.
+                "link_to_target_role",
             ],
         )
         contact_properties = contact.properties or {}
@@ -227,6 +226,41 @@ def main():
             print(f"  Warning: could not fetch company: {e}", file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
 
+        # Fetch associated opportunity (job ad) via association API
+        # Object type: p5402982_opportunities — "captures job ads posted by each account"
+        opportunity_properties = {}
+        opportunity_id = None
+        try:
+            opp_assoc_resp = req_lib.get(
+                f"https://api.hubapi.com/crm/v4/objects/contacts/{contact_id}/associations/p5402982_opportunities",
+                headers=headers,
+                timeout=30,
+            )
+            opp_assoc_resp.raise_for_status()
+            opp_ids = [r["toObjectId"] for r in opp_assoc_resp.json().get("results", [])]
+            if opp_ids:
+                opportunity_id = opp_ids[0]
+                opp_resp = req_lib.get(
+                    f"https://api.hubapi.com/crm/v3/objects/p5402982_opportunities/{opportunity_id}",
+                    headers=headers,
+                    params={"properties": "job_title,job_title___proper,job_description,job_post_link,job_board,vertical,company_name,date_job_posted,final_score,status"},
+                    timeout=30,
+                )
+                opp_resp.raise_for_status()
+                opportunity_properties = opp_resp.json().get("properties") or {}
+                print(
+                    f"Opportunity: {opportunity_properties.get('job_title', '(no title)')} "
+                    f"| {opportunity_properties.get('job_board', '')} "
+                    f"| score={opportunity_properties.get('final_score', 'N/A')} "
+                    f"(ID {opportunity_id})"
+                )
+                if len(opp_ids) > 1:
+                    print(f"  Note: contact has {len(opp_ids)} opportunities — using most recent")
+            else:
+                print("No associated opportunity found — job data will be empty", file=sys.stderr)
+        except Exception as e:
+            print(f"  Warning: could not fetch opportunity: {e}", file=sys.stderr)
+
         # Fetch engagements
         try:
             email_history, meeting_engagements, call_history, contact_notes = fetch_contact_engagements(
@@ -248,12 +282,13 @@ def main():
             f"{len(call_history)} calls, {len(contact_notes)} notes"
         )
         print(f"Company notes: {len(company_notes)}")
-        print(f"Job title posted: {contact_properties.get('job_title_posted', '(none)')}")
 
         output = {
             "contact_properties": contact_properties,
             "company_id": company_id,
             "company_properties": company_properties,
+            "opportunity_id": opportunity_id,
+            "opportunity_properties": opportunity_properties,
             "email_history": email_history,
             "meeting_engagements": meeting_engagements,
             "call_history": call_history,
