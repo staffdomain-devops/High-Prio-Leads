@@ -231,23 +231,57 @@ def main():
         opportunity_properties = {}
         opportunity_id = None
         try:
-            opp_assoc_resp = req_lib.get(
-                f"https://api.hubapi.com/crm/v4/objects/contacts/{contact_id}/associations/p5402982_opportunities",
-                headers=headers,
-                timeout=30,
-            )
-            opp_assoc_resp.raise_for_status()
-            opp_ids = [r["toObjectId"] for r in opp_assoc_resp.json().get("results", [])]
-            if opp_ids:
-                opportunity_id = opp_ids[0]
-                opp_resp = req_lib.get(
-                    f"https://api.hubapi.com/crm/v3/objects/p5402982_opportunities/{opportunity_id}",
+            # Association results are NOT ordered by recency — collect all (paginated),
+            # then pick the newest by date_job_posted, falling back to hs_createdate.
+            opp_ids = []
+            after = None
+            while True:
+                params = {"limit": 500}
+                if after:
+                    params["after"] = after
+                opp_assoc_resp = req_lib.get(
+                    f"https://api.hubapi.com/crm/v4/objects/contacts/{contact_id}/associations/p5402982_opportunities",
                     headers=headers,
-                    params={"properties": "job_title,job_title___proper,job_description,job_post_link,job_board,vertical,company_name,date_job_posted,final_score,status"},
+                    params=params,
+                    timeout=30,
+                )
+                opp_assoc_resp.raise_for_status()
+                assoc_json = opp_assoc_resp.json()
+                opp_ids.extend(str(r["toObjectId"]) for r in assoc_json.get("results", []))
+                after = (assoc_json.get("paging") or {}).get("next", {}).get("after")
+                if not after:
+                    break
+            if opp_ids:
+                opp_resp = req_lib.post(
+                    "https://api.hubapi.com/crm/v3/objects/p5402982_opportunities/batch/read",
+                    headers=headers,
+                    json={
+                        "inputs": [{"id": i} for i in opp_ids[:100]],
+                        "properties": [
+                            "job_title", "job_title___proper", "job_description", "job_post_link",
+                            "job_board", "vertical", "company_name", "date_job_posted",
+                            "final_score", "status", "hs_createdate",
+                        ],
+                    },
                     timeout=30,
                 )
                 opp_resp.raise_for_status()
-                opportunity_properties = opp_resp.json().get("properties") or {}
+                opps = opp_resp.json().get("results", [])
+
+                def _recency(o):
+                    p = o.get("properties") or {}
+                    # ISO dates / epoch-ms strings; normalise so both sort correctly
+                    def _norm(v):
+                        if not v:
+                            return ""
+                        return datetime.fromtimestamp(int(v) / 1000, tz=timezone.utc).isoformat() if v.isdigit() else v
+                    return (_norm(p.get("date_job_posted")), _norm(p.get("hs_createdate") or o.get("createdAt")), int(o["id"]))
+
+                if not opps:
+                    raise RuntimeError(f"batch read returned no opportunities for IDs {opp_ids}")
+                newest = max(opps, key=_recency)
+                opportunity_id = newest["id"]
+                opportunity_properties = newest.get("properties") or {}
                 print(
                     f"Opportunity: {opportunity_properties.get('job_title', '(no title)')} "
                     f"| {opportunity_properties.get('job_board', '')} "
@@ -255,7 +289,10 @@ def main():
                     f"(ID {opportunity_id})"
                 )
                 if len(opp_ids) > 1:
-                    print(f"  Note: contact has {len(opp_ids)} opportunities — using most recent")
+                    print(
+                        f"  Note: contact has {len(opp_ids)} opportunities — using most recent "
+                        f"(date_job_posted={opportunity_properties.get('date_job_posted') or 'n/a'})"
+                    )
             else:
                 print("No associated opportunity found — job data will be empty", file=sys.stderr)
         except Exception as e:
