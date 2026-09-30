@@ -232,7 +232,7 @@ def main():
         opportunity_id = None
         try:
             # Association results are NOT ordered by recency — collect all (paginated),
-            # then pick the newest by date_job_posted, falling back to hs_createdate.
+            # then pick the newest by object create date.
             opp_ids = []
             after = None
             while True:
@@ -268,14 +268,15 @@ def main():
                 opp_resp.raise_for_status()
                 opps = opp_resp.json().get("results", [])
 
+                # Newest = latest object create date (what the HubSpot UI sorts by).
+                # date_job_posted is unreliable on imported records, so it is not used.
                 def _recency(o):
-                    p = o.get("properties") or {}
-                    # ISO dates / epoch-ms strings; normalise so both sort correctly
-                    def _norm(v):
-                        if not v:
-                            return ""
-                        return datetime.fromtimestamp(int(v) / 1000, tz=timezone.utc).isoformat() if v.isdigit() else v
-                    return (_norm(p.get("date_job_posted")), _norm(p.get("hs_createdate") or o.get("createdAt")), int(o["id"]))
+                    created = (o.get("properties") or {}).get("hs_createdate") or o.get("createdAt") or ""
+                    try:
+                        ts = datetime.fromisoformat(created.replace("Z", "+00:00")).timestamp()
+                    except ValueError:
+                        ts = 0
+                    return (ts, int(o["id"]))
 
                 if not opps:
                     raise RuntimeError(f"batch read returned no opportunities for IDs {opp_ids}")
@@ -291,7 +292,7 @@ def main():
                 if len(opp_ids) > 1:
                     print(
                         f"  Note: contact has {len(opp_ids)} opportunities — using most recent "
-                        f"(date_job_posted={opportunity_properties.get('date_job_posted') or 'n/a'})"
+                        f"(created {opportunity_properties.get('hs_createdate') or 'n/a'})"
                     )
             else:
                 print("No associated opportunity found — job data will be empty", file=sys.stderr)
